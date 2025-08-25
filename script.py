@@ -33,28 +33,24 @@ def log_err(msg):
 warnings.filterwarnings("ignore", category=XMLParsedAsHTMLWarning)
 
 
-
 # ========= Вспомогалки =========
-def map_put(mapping: dict, fname: str, rel: str):
-    mapping[fname] = norm_slashes(rel)
-    mapping[fname.lower()] = norm_slashes(rel)
+def map_put(m, fname, path):
+    # чистое имя без ?#
+    clean_name = urllib.parse.unquote(fname.split("?", 1)[0].split("#", 1)[0])
+    clean_low = clean_name.lower()
 
+    # сохраняем как есть
+    m[clean_low] = path
+
+    # если в имени есть @ver=... — делаем алиас без него
+    if "@ver=" in clean_low:
+        base_name = clean_low.split("@ver=", 1)[0] + os.path.splitext(clean_low)[1]
+        m[base_name] = path
 
 
 
 def norm_slashes(path: str) -> str:
     return os.path.normpath(path).replace("\\", "/")
-
-
-
-def unquote_all(u: str) -> str:
-    prev = u
-    for _ in range(3):
-        u = urllib.parse.unquote(u)
-        if u == prev:
-            break
-        prev = u
-    return u
 
 
 
@@ -70,15 +66,6 @@ def strip_wayback(url: str) -> str:
                 return maybe + (("#" + parsed.fragment) if parsed.fragment else "")
     return url
 
-def strip_wayback_v2(url: str) -> str:
-    """Убираем префиксы web.archive.org"""
-    # пример: https://web.archive.org/web/20250517130256/https://wanakatriketours.co.nz/page
-    if "web.archive.org" in url:
-        parts = url.split("/", 5)
-        if len(parts) >= 6:
-            return "https://" + parts[5]
-    return url
-
 
 def url_basename(url: str) -> str:
     u = strip_wayback(url)
@@ -91,34 +78,16 @@ def is_img(name: str) -> bool:
     return os.path.splitext(name)[1].lower() in {".png",".jpg",".jpeg",".gif",".webp",".svg",".bmp",".ico",".avif"}
 
 
-
 def is_css(name: str) -> bool:
     return name.lower().endswith(".css")
-
 
 
 def is_js(name: str) -> bool:
     return name.lower().endswith(".js")
 
 
-
-
 def is_font(name: str) -> bool:
     return os.path.splitext(name)[1].lower() in {".woff",".woff2",".ttf",".otf",".eot"}
-
-
-
-def pick_parser(path: str) -> str:
-    low = path.lower()
-    return "xml" if (low.endswith(".xhtml") or low.endswith(".xml")) else "html.parser"
-
-
-
-
-def make_rel_from(path_from: str, site_root: str, rel_to: str) -> str:
-    abs_target = os.path.join(site_root, rel_to)
-    rel = os.path.relpath(abs_target, start=os.path.dirname(path_from))
-    return norm_slashes(rel)
 
 
 
@@ -182,17 +151,14 @@ def merge_dir(src: str, dst: str, on_conflict: str = "keep_dest"):
 def find_domain_root(site_dir_abs: str) -> str | None:
     site_dir_abs = os.path.abspath(site_dir_abs)
 
-    # 1) проверяем корень
     root_files = {f.lower() for f in os.listdir(site_dir_abs) if os.path.isfile(os.path.join(site_dir_abs, f))}
     if "index.html" in root_files or "index.htm" in root_files:
         return site_dir_abs
 
-    # 2) собираем кандидатов
     candidates = []
     for root, dirs, files in os.walk(site_dir_abs):
         lower = {f.lower() for f in files}
         if "index.html" in lower or "index.htm" in lower:
-            # считаем количество html внутри
             html_count = sum(1 for f in files if f.lower().endswith((".html", ".htm")))
             depth = len(os.path.relpath(root, site_dir_abs).split(os.sep))
             candidates.append((depth, -html_count, root))
@@ -215,7 +181,6 @@ def file_sha256(path: str, chunk_size: int = 1024 * 1024) -> str:
 
 
 
-
 def clean_domain(user_input: str) -> str:
     if not re.match(r'^https?://', user_input):
         user_input = "http://" + user_input
@@ -223,7 +188,6 @@ def clean_domain(user_input: str) -> str:
     parsed = urllib.parse.urlparse(user_input)
     domain = parsed.netloc.lower()
 
-    # убираем www.
     if domain.startswith("www."):
         domain = domain[4:]
 
@@ -233,10 +197,10 @@ def clean_domain(user_input: str) -> str:
 # =======  глобальные переменные
 domain_full = input("Введите домен (например: https://mizura-vugalo.sbs): ").strip()
 domain = clean_domain(domain_full)
-domain = domain.split(":")[0]
 site_dir = "site"
 site_abs = os.path.abspath(site_dir)
 script_name = os.path.basename(__file__)
+HTML_EXTS = (".html", ".htm", ".xhtml")
 
 
 # ========= Определяем папки
@@ -255,12 +219,12 @@ shutil.copytree(donor_dir, site_dir)
 
 domain_root = find_domain_root(site_abs)
 if domain_root and os.path.abspath(domain_root) != os.path.abspath(site_abs):
-    print(f"[i] Найден root: {domain_root}")
+    print(f"Найден root: {domain_root}")
     merge_dir(domain_root, site_abs)
     try:
         shutil.rmtree(domain_root)
     except Exception as e:
-        print(f"[!] Не удалось удалить {domain_root}: {e}")
+        print(f"Не удалось удалить {domain_root}: {e}")
 
 
 
@@ -289,7 +253,6 @@ else:
 
 
 
-
 # ========= Готовим папки assets
 assets_dir   = os.path.join(site_abs, "assets")
 assets_img   = os.path.join(assets_dir, "images")
@@ -298,7 +261,6 @@ assets_js    = os.path.join(assets_dir, "js")
 assets_fonts = os.path.join(assets_dir, "fonts")
 for p in (assets_img, assets_css, assets_js, assets_fonts):
     os.makedirs(p, exist_ok=True)
-
 
 img_map   = {}
 css_map   = {}
@@ -311,6 +273,7 @@ font_map  = {}
 
 # ========= Перенос ресурсов в assets
 log_step("Сбор ресурсов в assets/*")
+moved_map = {}
 for root, dirs, files in os.walk(site_abs):
     abs_root = os.path.abspath(root)
     if abs_root.startswith(os.path.abspath(assets_dir)):
@@ -395,13 +358,11 @@ def dedupe_folder(folder_abs: str, rel_prefix: str, mapping: dict):
         if h not in seen:
             seen[h] = fname
             continue
-        # дубликат — удаляем
         canon = seen[h]
         try:
             os.remove(fpath)
             removed += 1
             log(f"DUPE удалён: {fname} → используем {canon}")
-            # перенаправляем ссылки на дубликат к канону
             mapping[fname.lower()] = norm_slashes(os.path.join(rel_prefix, canon))
         except Exception as e:
             log_warn(f"Не удалось удалить дубликат '{fname}': {e}")
@@ -410,7 +371,7 @@ def dedupe_folder(folder_abs: str, rel_prefix: str, mapping: dict):
     else:
         log(f"Удалено дубликатов: {removed}")
 
-# прогоняем по всем папкам assets/*
+
 dedupe_folder(assets_img,   os.path.join("assets","images"), img_map)
 dedupe_folder(assets_css,   os.path.join("assets","css"),    css_map)
 dedupe_folder(assets_js,    os.path.join("assets","js"),     js_map)
@@ -422,9 +383,6 @@ dedupe_folder(assets_fonts, os.path.join("assets","fonts"),  font_map)
 
 # ========= Оптимизация изображений
 def optimize_image(path: str) -> tuple[bool, int, int]:
-    """
-    Возвращает (was_optimized, old_size, new_size)
-    """
     if not PIL_AVAILABLE:
         return (False, 0, 0)
     ext = os.path.splitext(path)[1].lower()
@@ -438,11 +396,11 @@ def optimize_image(path: str) -> tuple[bool, int, int]:
 
             if fmt == "JPEG":
                 im = im.convert("RGB")
-                im.save(temp_path, format="JPEG", quality=85, optimize=True, progressive=True)
+                im.save(temp_path, format="JPEG", optimize=True, progressive=True)
             elif fmt == "PNG":
                 im.save(temp_path, format="PNG", optimize=True)
             elif fmt == "WEBP":
-                im.save(temp_path, format="WEBP", quality=80, method=4)
+                im.save(temp_path, format="WEBP", method=4)
             else:
                 return (False, 0, 0)
 
@@ -472,7 +430,7 @@ else:
         if ok:
             saved = old_s - new_s
             saved_total += saved
-            log(f"OPTIMIZED {fname}: {old_s} → {new_s} байт (-{saved})")
+            log(f"Оптимизировано {fname}: {old_s} → {new_s} байт (-{saved})")
     if saved_total:
         log(f"Итого экономия: {saved_total} байт")
     else:
@@ -482,507 +440,149 @@ else:
 
 
 
+def externalize_built_in_styles(site_base="site", strict_per_file=True, class_prefix="bi"):
+    site_abs = os.path.abspath(site_base)
+    assets_css_dir = os.path.join(site_abs, "assets", "css")
+    os.makedirs(assets_css_dir, exist_ok=True)
 
-# ========= Функции замены URL
-def replace_single(url_val: str, html_abs: str) -> str:
-    """
-    Преобразует web.archive ссылку в локальный относительный путь.
-    html_abs — полный путь текущего HTML (нужно для построения относительных ссылок).
-    """
-    clean = strip_wayback_v2(url_val)
-    parsed = urllib.parse.urlparse(clean)
+    def _norm(p: str) -> str:
+        return p.replace("\\", "/")
 
-    # Определяем имя файла
-    if parsed.path == "" or parsed.path.endswith("/"):
-        file_name = "index.html"
-    else:
-        file_name = os.path.basename(parsed.path)
+    processed = 0
 
-    # Определяем папку
-    folder = parsed.netloc.replace(":", "_")  # домен → папка
-    rel_path = f"../{folder}/{file_name}"
+    for root, _, files in os.walk(site_abs):
+        for fname in files:
+            if not fname.lower().endswith((".html", ".htm", ".xhtml")):
+                continue
 
-    return rel_path
+            html_abs = os.path.join(root, fname)
+            try:
+                with open(html_abs, "r", encoding="utf-8", errors="ignore") as f:
+                    html = f.read()
+            except Exception as e:
+                print(f"[built-in][WARN] Не зміг відкрити {html_abs}: {e}")
+                continue
 
-def replace_srcset(val: str, html_abs: str):
-    parts = [p.strip() for p in (val or "").split(",") if p.strip()]
-    out = []
-    for p in parts:
-        segs = p.split()
-        if not segs:
-            continue
-        u = segs[0]
-        rest = " ".join(segs[1:]) if len(segs) > 1 else ""
-        new_u = replace_single(u, html_abs)
-        out.append(new_u + ((" " + rest) if rest else ""))
-    return ", ".join(out)
+            soup = BeautifulSoup(html, "html.parser")
 
+            style_chunks = []
+            for st in soup.find_all("style"):
+                t = (st.get("type") or "text/css").lower()
+                if t not in ("", "text/css", "css"):
+                    continue
+                css_text = st.string if st.string is not None else st.get_text()
+                if css_text and css_text.strip():
+                    style_chunks.append(css_text.strip())
+                st.decompose()
 
+            inline_map = {}
+            for el in soup.find_all(True):
+                if not el.has_attr("style"):
+                    continue
+                style_text = el["style"].strip().rstrip(";")
+                if not style_text:
+                    del el["style"]
+                    continue
+                key = re.sub(r"\s+", " ", style_text)
+                if key not in inline_map:
+                    h = hashlib.sha1(key.encode("utf-8")).hexdigest()[:8]
+                    inline_map[key] = f"{class_prefix}-{h}"
+                clsname = inline_map[key]
 
+                existing = el.get("class")
+                if isinstance(existing, list):
+                    classes = existing
+                elif isinstance(existing, str):
+                    classes = existing.split()
+                else:
+                    classes = []
+                if clsname not in classes:
+                    classes.append(clsname)
+                    el["class"] = classes
 
+                del el["style"]
 
+            css_parts = []
+            if style_chunks:
+                css_parts.append("/* extracted <style> blocks */\n" + "\n\n".join(style_chunks))
+            if inline_map:
+                rules = [f".{cls} {{{rules}}}" for rules, cls in inline_map.items()]
+                css_parts.append("/* rules created from style=\"...\" */\n" + "\n".join(rules))
+            css_text_final = ("\n\n".join(css_parts)).strip()
+            if not css_text_final:
+                rel_html = _norm(os.path.relpath(html_abs, site_abs))
+                dir_rel = os.path.dirname(rel_html)
+                html_base = os.path.splitext(os.path.basename(rel_html))[0]
+                if dir_rel == "":
+                    css_name = f"{html_base}-built-in.css"
+                else:
+                    folder = os.path.basename(dir_rel.rstrip("/"))
+                    css_name = f"{folder}-{html_base}-built-in.css" if strict_per_file else f"{folder}-built-in.css"
+                css_abs = os.path.join(assets_css_dir, css_name)
+                rel_href = _norm(os.path.relpath(css_abs, start=os.path.dirname(html_abs)))
+                head = soup.head or soup.new_tag("head")
+                if not soup.head:
+                    (soup.html or soup).insert(0, head)
+                updated = False
+                for lnk in head.find_all("link", href=True):
+                    rels = [r.lower() for r in (lnk.get("rel") or [])]
+                    if "stylesheet" in rels and os.path.basename(_norm(lnk["href"])) == css_name:
+                        if _norm(lnk["href"]) != rel_href:
+                            lnk["href"] = rel_href
+                        updated = True
+                        break
+                if not updated:
+                    head.append(soup.new_tag("link", rel="stylesheet", href=rel_href))
+                with open(html_abs, "w", encoding="utf-8") as f:
+                    f.write(str(soup))
+                continue
 
+            rel_html = _norm(os.path.relpath(html_abs, site_abs))
+            dir_rel = os.path.dirname(rel_html)
+            html_base = os.path.splitext(os.path.basename(rel_html))[0]
+            if dir_rel == "":
+                css_name = f"{html_base}-built-in.css"
+            else:
+                folder = os.path.basename(dir_rel.rstrip("/"))
+                css_name = f"{folder}-{html_base}-built-in.css" if strict_per_file else f"{folder}-built-in.css"
 
+            css_abs = os.path.join(assets_css_dir, css_name)
+            rel_href = _norm(os.path.relpath(css_abs, start=os.path.dirname(html_abs)))
 
+            with open(css_abs, "w", encoding="utf-8") as cf:
+                cf.write(css_text_final + "\n")
 
+            head = soup.head
+            if not head:
+                head = soup.new_tag("head")
+                if soup.html:
+                    soup.html.insert(0, head)
+                else:
+                    soup.insert(0, head)
 
+            href_patched = False
+            for lnk in head.find_all("link", href=True):
+                rels = [r.lower() for r in (lnk.get("rel") or [])]
+                if "stylesheet" in rels and os.path.basename(_norm(lnk["href"])) == css_name:
+                    lnk["href"] = rel_href
+                    href_patched = True
+                    break
+            if not href_patched:
+                head.append(soup.new_tag("link", rel="stylesheet", href=rel_href))
 
-# ========= переписываем пути HTML/XHTML/XML
-log_step("Переписываем пути в HTML/XHTML/XML")
-HTML_EXTS = (".html",".htm",".xhtml",".xml")
-html_files_count = 0
-rewritten_refs = 0
-
-for root, dirs, files in os.walk(site_abs):
-    for fname in files:
-        if not fname.lower().endswith(HTML_EXTS):
-            continue
-        html_abs = os.path.join(root, fname)
-        parser = pick_parser(html_abs)
-        with open(html_abs, "r", encoding="utf-8", errors="ignore") as f:
-            soup = BeautifulSoup(f, features=parser)
-
-        changed = False
-
-        for tag in soup.find_all(True):
-            if tag.name == "img":
-                if tag.has_attr("src"):
-                    old = tag["src"]; nv = replace_single(old, html_abs)
-                    if nv != old: tag["src"] = nv; changed = True; rewritten_refs += 1
-                if tag.has_attr("srcset"):
-                    old = tag["srcset"]; nv = replace_srcset(old, html_abs)
-                    if nv != old: tag["srcset"] = nv; changed = True; rewritten_refs += 1
-                for a in ("data-src","data-original","data-lazy","data-srcset"):
-                    if tag.has_attr(a):
-                        val = tag[a]
-                        nv = replace_srcset(val, html_abs) if "srcset" in a else replace_single(val, html_abs)
-                        if nv != val: tag[a] = nv; changed = True; rewritten_refs += 1
-
-            elif tag.name == "source":
-                for a in ("src","srcset","data-src","data-srcset"):
-                    if tag.has_attr(a):
-                        val = tag[a]
-                        nv = replace_srcset(val, html_abs) if "srcset" in a else replace_single(val, html_abs)
-                        if nv != val: tag[a] = nv; changed = True; rewritten_refs += 1
-
-            elif tag.name == "link":
-                if tag.has_attr("href"):
-                    old = tag["href"]; nv = replace_single(old, html_abs)
-                    if nv != old: tag["href"] = nv; changed = True; rewritten_refs += 1
-
-            elif tag.name == "script":
-                if tag.has_attr("src"):
-                    old = tag["src"]; nv = replace_single(old, html_abs)
-                    if nv != old: tag["src"] = nv; changed = True; rewritten_refs += 1
-
-            elif tag.name == "video" and tag.has_attr("poster"):
-                old = tag["poster"]; nv = replace_single(old, html_abs)
-                if nv != old: tag["poster"] = nv; changed = True; rewritten_refs += 1
-
-            elif tag.name == "input" and tag.get("type","").lower() == "image" and tag.has_attr("src"):
-                old = tag["src"]; nv = replace_single(old, html_abs)
-                if nv != old: tag["src"] = nv; changed = True; rewritten_refs += 1
-
-            if tag.name == "image":
-                for a in ("href","xlink:href"):
-                    if tag.has_attr(a):
-                        old = tag[a]; nv = replace_single(old, html_abs)
-                        if nv != old: tag[a] = nv; changed = True; rewritten_refs += 1
-
-            if tag.has_attr("style"):
-                style_val = tag["style"]
-                def repl(m):
-                    inside = m.group(1).strip(' \'"')
-                    new_u = replace_single(inside, html_abs)
-                    return f"url({new_u})"
-                new_style = re.sub(r"url\((.*?)\)", repl, style_val, flags=re.I)
-                if new_style != style_val:
-                    tag["style"] = new_style; changed = True; rewritten_refs += 1
-
-        if changed:
             with open(html_abs, "w", encoding="utf-8") as f:
                 f.write(str(soup))
-        html_files_count += 1
 
-log(f"Обработано HTML файлов: {html_files_count}")
-log(f"Переписано ссылок/ресурсов: {rewritten_refs}")
+            processed += 1
+            print(f"[built-in] {_norm(rel_html)} → assets/css/{css_name}")
 
+    print(f"[built-in] Готово. Оброблено HTML: {processed}")
 
+externalize_built_in_styles("site", strict_per_file=True, class_prefix="bi")
 
-# ========== чистим код и структурируем ==========
-def clean_trash_code(file_path: str) -> bool:
-    changed = False
 
-    WAYBACK_TRASH_PATTERNS = [
-        "web.archive.org",
-        "web-static.archive.org",
-        "/_static/",
-        "/__wb/",
-        "wombat.js",
-        "bundle-playback.js",
-        "athena.js",
-        "ruffle.js",
-        "banner-styles.css",
-        "iconochive.css",
-        "gmpg.org/xfn",
-        "archive.org",
-    ]
 
-    INLINE_TRASH_PATTERNS = [
-        "window.ruffleplayer",
-        "athena.js",
-        "wombat.js",
-        "bundle-playback.js"
-    ]
-
-    def is_trash_url(url: str) -> bool:
-        return url and any(p.lower() in url.lower() for p in WAYBACK_TRASH_PATTERNS)
-
-    def looks_wayback_text(s: str) -> bool:
-        sl = s.lower()
-        return any(p in sl for p in WAYBACK_TRASH_PATTERNS) or "wayback" in sl
-
-    try:
-        with open(file_path, "r", encoding="utf-8") as f:
-            html = f.read()
-    except FileNotFoundError:
-        return False
-
-    soup = BeautifulSoup(html, "html.parser")
-
-    # ====== Чистим <script> и <link> ======
-    for tag in list(soup.find_all(["script", "link"])):
-        if not tag:
-            continue
-
-        url_attr = "src" if tag.name == "script" else "href"
-        u = tag.get(url_attr)
-
-        # Игнорируем wp-json
-        if u and "wp-json" in u:
-            continue
-
-        # Удаляем Web Archive / Ruffle / Athena / Wombat
-        if is_trash_url(u):
-            tag.decompose()
-            changed = True
-            continue
-
-        # Проверяем inline JS
-        if tag.name == "script" and tag.string:
-            if any(p.lower() in tag.string.lower() for p in INLINE_TRASH_PATTERNS):
-                tag.decompose()
-                changed = True
-                continue
-
-        # JSON скрипты не трогаем
-        if tag.name == "script" and tag.get("type") == "application/ld+json":
-            continue
-
-    # ====== Удаляем комментарии и текст с Wayback ======
-    for c in list(soup.find_all(string=lambda t: isinstance(t, (str, Comment)))):
-        try:
-            if looks_wayback_text(c):
-                c.extract()
-                changed = True
-        except Exception:
-            pass
-
-    # ====== Сохраняем обратно ======
-    if changed:
-        with open(file_path, "w", encoding="utf-8") as f:
-            f.write(str(soup))
-
-    return changed
-
-
-# Прогоняем по всем HTML в папке
-def clean_trash_in_dir(site_dir: str):
-    for root, dirs, files in os.walk(site_dir):
-        for file in files:
-            if file.lower().endswith(".html"):
-                file_path = os.path.join(root, file)
-                if clean_trash_code(file_path):
-                    print(f"✔ Почистил мусор Wayback в {file_path}")
-
-
-HTML_EXTS = (".html", ".htm", ".xhtml")
-
-def consolidate_meta(file_path: str) -> bool:
-    changed = False
-
-    try:
-        with open(file_path, "r", encoding="utf-8") as f:
-            html = f.read()
-    except Exception as e:
-        print(f"⚠ Ошибка при открытии {file_path}: {e}")
-        return False
-
-    soup = BeautifulSoup(html, "html.parser")
-
-    # создаём head если нет
-    if not soup.head:
-        head = soup.new_tag("head")
-        if soup.html:
-            soup.html.insert(0, head)
-        else:
-            soup.insert(0, head)
-        changed = True
-    else:
-        head = soup.head
-
-    # собираем все meta
-    all_meta = soup.find_all("meta")
-    if not all_meta:
-        return False
-
-    # удаляем из документа
-    for m in all_meta:
-        m.extract()
-        changed = True
-
-    # создаём временный контейнер и собираем все meta туда
-    temp_soup = BeautifulSoup("", "html.parser")
-    for m in all_meta:
-        temp_soup.append(m)
-        temp_soup.append("\n")  # перенос строки после каждого meta
-
-    # вставляем блок после <title> или в начало head
-    title_tag = head.title
-    if title_tag:
-        title_tag.insert_after(temp_soup)
-    else:
-        head.insert(0, temp_soup)
-
-    # сохраняем обратно
-    if changed:
-        with open(file_path, "w", encoding="utf-8") as f:
-            f.write(str(soup))
-
-    return changed
-
-
-
-def consolidate_meta_in_dir(site_dir: str):
-    for root, dirs, files in os.walk(site_dir):
-        for file in files:
-            if not file.lower().endswith(HTML_EXTS):
-                continue
-            file_path = os.path.join(root, file)
-            if consolidate_meta(file_path):
-                print(f"✔ Meta собраны в head: {file_path}")
-            else:
-                print(f"— Изменений не было: {file_path}")
-
-
-clean_trash_in_dir(site_dir)
-consolidate_meta_in_dir(site_dir)
-
-
-
-# ========= переписываем пути CSS: url(...) и @import
-log_step("Переписываем пути в CSS (@import, url(...))")
-
-def css_rewrite_paths(css_abs: str):
-    with open(css_abs, "r", encoding="utf-8", errors="ignore") as f:
-        txt = f.read()
-    changed = False
-
-    def repl_import(m):
-        nonlocal changed
-        urlq = (m.group(1) or m.group(2)).strip().strip('"\'')
-        clean = strip_wayback(urlq)
-        key = url_basename(clean).lower()
-
-        if key in css_map:
-            target = css_map[key]
-        elif clean in css_map:
-            target = css_map[clean]
-        else:
-            return m.group(0)
-
-        new_rel = os.path.relpath(
-            os.path.join(site_abs, target),
-            start=os.path.dirname(css_abs)
-        )
-        changed = True
-        return f'@import "{norm_slashes(new_rel)}";'
-
-    txt2 = re.sub(
-        r'@import\s+(?:(?:url\(\s*[\'"]?(.*?)[\'"]?\s*\))|[\'"](.*?)[\'"])\s*;',
-        repl_import, txt, flags=re.I
-    )
-
-    # url(...)
-    def repl_url(m):
-        nonlocal changed
-        inside = m.group(1).strip().strip('"\'')
-        clean = strip_wayback(inside).split("#", 1)[0].split("?", 1)[0]
-        key = url_basename(clean).lower()
-
-        if key in img_map:
-            target = img_map[key]
-        elif clean in img_map:
-            target = img_map[clean]
-        elif key in font_map:
-            target = font_map[key]
-        elif clean in font_map:
-            target = font_map[clean]
-        else:
-            if clean != inside:
-                changed = True
-                return f'url({clean})'
-            return m.group(0)
-
-        new_rel = os.path.relpath(
-            os.path.join(site_abs, target),
-            start=os.path.dirname(css_abs)
-        )
-        changed = True
-        return f'url({norm_slashes(new_rel)})'
-
-    txt3 = re.sub(r'url\((.*?)\)', repl_url, txt2, flags=re.I)
-
-    if txt3 != txt:
-        changed = True
-        with open(css_abs, "w", encoding="utf-8") as f:
-            f.write(txt3)
-    return changed
-
-
-css_changed_count = 0
-for fname in os.listdir(assets_css):
-    if is_css(fname):
-        changed = css_rewrite_paths(os.path.join(assets_css, fname))
-        if changed:
-            css_changed_count += 1
-            log(f"CSS обновлён: {fname}")
-
-log(f"CSS файлов переписано: {css_changed_count}")
-
-
-
-
-
-
-
-# ======== удалим мусорные папки и файлы
-def prepare_site_structure(site_base: str = "site"):
-    site_abs = os.path.abspath(site_base)
-    domain_root = find_domain_root(site_abs)
-    if not domain_root:
-        raise RuntimeError("Не удалось найти корень сайта")
-
-    if os.path.abspath(domain_root) != site_abs:
-        merge_dir(domain_root, site_abs)
-        shutil.rmtree(domain_root, ignore_errors=True)
-
-    trash_dirs = {"wp-content", "wp-includes", "analytics", "google-analytics", "tagmanager", "www.googletagmanager.com", "wp-json"}
-    trash_exts = {".php", ".asp", ".jsp"}
-
-    for root, dirs, files in os.walk(site_abs, topdown=True):
-        # удаляем папки-мусор
-        for d in dirs[:]:
-            if d.lower() in trash_dirs:
-                p = os.path.join(root, d)
-                shutil.rmtree(p, ignore_errors=True)
-                log(f"Удалена папка мусор: {p}")
-                dirs.remove(d)
-
-        # удаляем файлы-мусор
-        for f in files:
-            if any(f.lower().endswith(ext) for ext in trash_exts):
-                p = os.path.join(root, f)
-                try:
-                    os.remove(p)
-                    log(f"Удалён файл мусор: {p}")
-                except Exception as e:
-                    log_warn(f"Не удалось удалить {p}: {e}")
-
-    log(f"Структура сайта подготовлена: {site_base}")
-
-prepare_site_structure("site")
-
-
-
-
-
-
-# ========= Удалим пустые папки
-log_step("Удаляем пустые папки")
-removed_dirs = 0
-for root, dirs, files in os.walk(site_abs, topdown=False):
-    for d in dirs:
-        p = os.path.join(root, d)
-        if os.path.abspath(p).startswith(os.path.abspath(assets_dir)):
-            continue
-        try:
-            if not os.listdir(p):
-                os.rmdir(p)
-                removed_dirs += 1
-                log(f"Папка удалена: {p}")
-        except OSError as e:
-            log_warn(f"Не удалось удалить '{p}': {e}")
-
-
-
-
-
-# ======= генерация sitemap и robots
-def generate_robots_and_sitemap(site_base: str = "site", domain: str = None):
-
-    site_abs = os.path.abspath(site_base)
-
-    # --- robots.txt ---
-    robots_path = os.path.join(site_abs, "robots.txt")
-    with open(robots_path, "w", encoding="utf-8") as f:
-        f.write(f"""User-agent: *
-Allow: /
-Sitemap: https://{domain}/sitemap.xml
-""")
-    log(f"robots.txt создан: {robots_path}")
-
-    # --- sitemap.xml ---
-    urls = []
-    today = datetime.today().strftime("%Y-%m-%d")
-
-    for root, dirs, files in os.walk(site_abs):
-        for fname in files:
-            if fname.lower().endswith((".html", ".htm")):
-                abs_path = os.path.join(root, fname)
-                rel_path = os.path.relpath(abs_path, site_abs)
-                rel_url = rel_path.replace(os.sep, "/")
-                if fname.lower() in ("index.html", "index.htm"):
-                    if os.path.dirname(rel_url) == "":
-                        loc = f"https://{domain}/"
-                    else:
-                        folder = os.path.dirname(rel_url)
-                        loc = f"https://{domain}/{folder}/"
-                else:
-                    loc = f"https://{domain}/{rel_url}"
-
-                urls.append((loc, today))
-
-    sitemap_path = os.path.join(site_abs, "sitemap.xml")
-    with open(sitemap_path, "w", encoding="utf-8") as f:
-        f.write('<?xml version="1.0" encoding="UTF-8"?>\n')
-        f.write('<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n')
-        for loc, lastmod in urls:
-            f.write("    <url>\n")
-            f.write(f"        <loc>{loc}</loc>\n")
-            f.write(f"        <lastmod>{lastmod}</lastmod>\n")
-            f.write("        <changefreq>weekly</changefreq>\n")
-            f.write("        <priority>0.8</priority>\n")
-            f.write("    </url>\n")
-        f.write("</urlset>\n")
-
-    log(f"sitemap.xml создан: {sitemap_path} (всего {len(urls)} страниц)")
-
-generate_robots_and_sitemap("site")
-
-
-
-
+# =========== Перезапись путей
 RESOURCE_EXTS = {
     ".css", ".js", ".mjs", ".json", ".map",
     ".png", ".jpg", ".jpeg", ".gif", ".svg", ".webp", ".ico",
@@ -993,31 +593,18 @@ RESOURCE_EXTS = {
 
 MAX_STRIP_PREFIX_SEGMENTS = 2
 
-def url_host(url: str) -> str:
-    try:
-        return urllib.parse.urlparse(url).netloc.lower()
-    except Exception:
-        return ""
-
-def same_site(host: str, base_host: str) -> bool:
-    if not host:
-        return False
-    host = host.lower()
-    base_host = base_host.lower()
-    return host == base_host or host.endswith("." + base_host)
 
 def build_file_map(site_dir: str):
-    files = set()
+    file_map = {}
     page_dirs = set()
-    for root, _, fnames in os.walk(site_dir):
-        for fn in fnames:
-            full = os.path.join(root, fn)
-            rel = os.path.relpath(full, site_dir)
-            rel = norm_slashes(rel)
-            files.add(rel)
-            if fn.lower() == "index.html":
-                page_dirs.add(norm_slashes(os.path.relpath(root, site_dir)))
-    return files, page_dirs
+    for root, _, files in os.walk(site_dir):
+        for file in files:
+            full_path = os.path.join(root, file)
+            rel_path = norm_slashes(os.path.relpath(full_path, site_dir))
+            file_map[rel_path.lower()] = rel_path
+            if file.lower().endswith(HTML_EXTS):
+                page_dirs.add(os.path.dirname(rel_path))
+    return file_map, page_dirs
 
 def is_resource_path(path_no_qf: str) -> bool:
     _, ext = os.path.splitext(path_no_qf.lower())
@@ -1081,20 +668,171 @@ def should_skip_scheme(url: str) -> bool:
     low = url.lower()
     return low.startswith(("mailto:", "tel:", "javascript:", "data:", "blob:", "about:"))
 
-def fix_local_links_in_site(site_dir: str, domain: str):
-    file_map, page_dirs = build_file_map(site_dir)
 
-    base_host = url_host(domain)
-    if not base_host:
-        print("Введён домен без хоста. Пример корректного ввода: https://example.com")
+def extract_path_after_domain(url_str: str, base_host: str) -> tuple[str | None, str | None]:
+    s = url_str
+    s_low = s.lower()
+    host_low = base_host.lower()
+    i = s_low.find(host_low)
+    if i == -1:
+        return None, None
+    k = i + len(base_host)
+    if k < len(s) and s[k] == ":":
+        k += 1
+        while k < len(s) and s[k].isdigit():
+            k += 1
+    slash_pos = s.find("/", k)
+    if slash_pos == -1:
+        path_plus = "/"
+    else:
+        path_plus = s[slash_pos:]
+
+    base_no_qf, _q, frag = split_qf(path_plus)
+    return base_no_qf or "/", frag
+
+
+
+def rewrite_srcset(tag, img_map, file_path):
+    if not tag.has_attr("srcset"):
         return
 
+    srcset_val = tag["srcset"]
+    new_parts = []
+
+    for part in srcset_val.split(","):
+        part = part.strip()
+        if not part:
+            continue
+
+        segments = part.split()
+        url = segments[0]
+        size = " ".join(segments[1:]) if len(segments) > 1 else ""
+
+        file_name = os.path.basename(url)
+        clean_name = urllib.parse.unquote(file_name)
+
+        if clean_name.lower() in img_map:
+            new_url = make_relative(file_path, img_map[clean_name.lower()])
+        else:
+            new_url = url
+
+        new_parts.append(f"{new_url} {size}".strip())
+
+    tag["srcset"] = ", ".join(new_parts)
+
+
+def rewrite_srcset_call(soup, img_map, file_path):
+    for img in soup.find_all("img"):
+        # переписываем обычный src
+        if img.has_attr("src"):
+            file_name = os.path.basename(img["src"])
+            clean_name = urllib.parse.unquote(file_name).lower()
+            if clean_name in img_map:
+                img["src"] = make_relative(file_path, img_map[clean_name])
+
+        # переписываем srcset через функцию
+        rewrite_srcset(img, img_map, file_path)
+
+
+for root, _, files in os.walk(site_dir):
+    for file in files:
+        if not file.lower().endswith(HTML_EXTS):
+            continue
+
+        file_path = os.path.join(root, file)
+
+        with open(file_path, "r", encoding="utf-8") as f:
+            html = f.read()
+
+        soup = BeautifulSoup(html, "html.parser")
+        rewrite_srcset_call(soup, img_map, file_path)
+
+        # и не забудь записать обратно!
+        with open(file_path, "w", encoding="utf-8") as f:
+            f.write(str(soup))
+
+
+
+ROOT_DIR = "site"
+HTML_EXTS = (".html", ".htm")
+
+LINK_RE = re.compile(r'''(src|href)\s*=\s*["']([^"'?#]+)(\?[^"'#]+)?(["'])''', re.IGNORECASE)
+
+RESOURCE_EXTS = (".css", ".js", ".png", ".jpg", ".jpeg", ".gif", ".svg", ".webp", ".ico", ".bmp", ".ttf", ".woff", ".woff2", ".eot", ".mp4", ".webm")
+
+
+def fix_filename(url: str, query: str | None) -> str:
+    filename = os.path.basename(url)
+    if query:
+        dot_index = filename.rfind(".")
+        if dot_index != -1:
+            filename = f"{filename[:dot_index]}{filename[dot_index:]}@{query.lstrip('?')}{filename[dot_index:]}"
+        else:
+            filename = f"{filename}@{query.lstrip('?')}"
+    return filename
+
+
+def process_html_file(file_path: str):
+    with open(file_path, "r", encoding="utf-8", errors="ignore") as f:
+        html = f.read()
+
+    def replacer(match):
+        attr, url, query, quote = match.groups()
+        filename = fix_filename(url, query)
+        return f'{attr}="{filename}"'
+
+    new_html = LINK_RE.sub(replacer, html)
+
+    if new_html != html:
+        with open(file_path, "w", encoding="utf-8") as f:
+            f.write(new_html)
+        print(f"Обновлено: {file_path}")
+
+
+def process_resources_in_html(file_path: str):
+    with open(file_path, "r", encoding="utf-8", errors="ignore") as f:
+        html = f.read()
+
+    def replacer(match):
+        attr, url, query, quote = match.groups()
+
+        ext = os.path.splitext(url)[1].lower()
+        if not ext:
+            return match.group(0)
+
+        if not url.lower().endswith(RESOURCE_EXTS):
+            return match.group(0)
+
+        filename = fix_filename(url, query)
+
+        if ext in (".css",):
+            filename = f"assets/css/{filename}"
+        elif ext in (".js",):
+            filename = f"assets/js/{filename}"
+        elif ext in (".png", ".jpg", ".jpeg", ".gif", ".svg", ".webp", ".ico", ".bmp"):
+            filename = f"images/{filename}"
+
+        return f'{attr}="{filename}"'
+
+    new_html = LINK_RE.sub(replacer, html)
+
+    if new_html != html:
+        with open(file_path, "w", encoding="utf-8") as f:
+            f.write(new_html)
+        print(f"Ресурсы обновлены: {file_path}")
+
+
+# ================== ТВОЙ МЕТОД ДЛЯ СТРАНИЦ ==================
+def fix_local_links_in_site(site_dir: str, domain: str):
+    file_map, _page_dirs = build_file_map(site_dir)
     total_files = 0
     changed_links = 0
 
+
+
     for root, _, files in os.walk(site_dir):
         for file in files:
-            if not file.lower().endswith(".html"):
+            if not file.lower().endswith(HTML_EXTS):
                 continue
 
             file_path = os.path.join(root, file)
@@ -1108,40 +846,33 @@ def fix_local_links_in_site(site_dir: str, domain: str):
             def rewrite_attr(tag, attr):
                 nonlocal changed_links
                 val = tag.get(attr)
-                if not val or should_skip_scheme(val):
+                if not val:
                     return
-                val = strip_wayback(val)
-                parsed = urllib.parse.urlparse(val)
-                if parsed.scheme in ("http", "https"):
-                    if not same_site(parsed.netloc, base_host):
-                        return
-                elif val.startswith("//"):
-                    host2 = url_host("https:" + val)
-                    if not same_site(host2, base_host):
-                        return
-                if parsed.scheme in ("http", "https") or val.startswith("//"):
-                    root_rel = parsed.path
-                elif val.startswith("/"):
-                    root_rel = parsed.path
-                else:
+                if should_skip_scheme(val):
                     return
 
-                base_no_qf, _query, fragment = split_qf(root_rel)
-
-                cleaned = clean_root_path(base_no_qf)
-
+                if domain_full.lower() not in val.lower():
+                    return
+                path_after, fragment = extract_path_after_domain(val, domain_full)
+                if not path_after:
+                    return
+                cleaned = clean_root_path(path_after)
                 target_rel = None
-                if is_resource_path(cleaned):
-                    if cleaned in file_map:
-                        target_rel = cleaned
-                else:
-                    target_rel = resolve_local_target(cleaned, file_map)
+                if cleaned == "":
+                    for cand in ("index.html", "index.htm"):
+                        if cand in file_map:
+                            target_rel = cand
+                            break
+                if not target_rel:
+                    if is_resource_path(cleaned):
+                        if cleaned in file_map:
+                            target_rel = cleaned
+                    else:
+                        target_rel = resolve_local_target(cleaned, file_map)
 
                 if not target_rel:
                     return
-
                 rel_out = make_relative(file_path, target_rel)
-
                 if fragment:
                     rel_out = f"{rel_out}#{fragment}"
 
@@ -1149,11 +880,10 @@ def fix_local_links_in_site(site_dir: str, domain: str):
                     tag[attr] = rel_out
                     changed_links += 1
 
-            # Переписываем href/src
-            for a in soup.find_all(href=True):
-                rewrite_attr(a, "href")
-            for s in soup.find_all(src=True):
-                rewrite_attr(s, "src")
+            for t in soup.find_all(href=True):
+                rewrite_attr(t, "href")
+            for t in soup.find_all(src=True):
+                rewrite_attr(t, "src")
 
             with open(file_path, "w", encoding="utf-8") as f:
                 f.write(str(soup))
@@ -1164,7 +894,452 @@ def fix_local_links_in_site(site_dir: str, domain: str):
     print(f"HTML-файлов обработано: {total_files}")
     print(f"Ссылок переписано:      {changed_links}")
 
-fix_local_links_in_site(site_dir, domain_full)
+
+def walk_and_fix(root: str, domain: str):
+    for dirpath, _, filenames in os.walk(root):
+        for fn in filenames:
+            if fn.lower().endswith(HTML_EXTS):
+                abs_path = os.path.join(dirpath, fn)
+
+                process_resources_in_html(abs_path)
+
+    fix_local_links_in_site(root, domain)
+
+
+
+walk_and_fix(ROOT_DIR, domain)
+
+
+
+
+
+
+
+ROOT_DIR = "site"
+HTML_EXTS = (".html", ".htm")
+
+def normalize_css_filename(href: str, html_path: str, site_root: str = ROOT_DIR) -> str:
+    href = re.sub(r"^https?://web\.archive\.org/web/\d+[^/]+/", "", href)
+
+    href = re.sub(r"^https?:\/\/", "", href)
+
+    base = os.path.basename(href)
+
+    safe_name = base.replace("?", "@").replace("&", ",")
+
+    if not safe_name.lower().endswith(".css"):
+        safe_name += ".css"
+
+    html_dir = os.path.dirname(os.path.relpath(html_path, site_root))
+    depth = 0 if html_dir == "" else html_dir.count(os.sep) + 1
+    prefix = "../" * depth
+
+    return f"{prefix}assets/css/{safe_name}"
+
+
+def process_html_file(file_path: str):
+    with open(file_path, "r", encoding="utf-8", errors="ignore") as f:
+        html = f.read()
+
+    soup = BeautifulSoup(html, "html.parser")
+    head = soup.find("head")
+    if not head:
+        print(f"Нет <head>: {file_path}")
+        return
+
+    new_links = []
+    for link in soup.find_all("link", rel="stylesheet"):
+        href = link.get("href")
+        if not href:
+            continue
+
+        if href.lower().endswith("-built-in.css"):
+            continue
+
+        new_href = normalize_css_filename(href, file_path, ROOT_DIR)
+        new_link = soup.new_tag("link", rel="stylesheet", href=new_href)
+        new_links.append(new_link)
+
+    for old_link in head.find_all("link", rel="stylesheet"):
+        old_link.decompose()
+
+    for l in new_links:
+        head.append(l)
+
+    with open(file_path, "w", encoding="utf-8") as f:
+        f.write(str(soup))
+
+    print(f"✔ Стили обновлены: {file_path}")
+
+
+def process_site():
+    for root, _, files in os.walk(ROOT_DIR):
+        for fn in files:
+            if fn.lower().endswith(HTML_EXTS):
+                process_html_file(os.path.join(root, fn))
+
+
+if __name__ == "__main__":
+    process_site()
+
+
+def consolidate_meta(file_path: str) -> bool:
+    changed = False
+    try:
+        with open(file_path, "r", encoding="utf-8") as f:
+            html = f.read()
+    except Exception as e:
+        print(f"Ошибка при открытии {file_path}: {e}")
+        return False
+    soup = BeautifulSoup(html, "html.parser")
+    if not soup.head:
+        head = soup.new_tag("head")
+        if soup.html:
+            soup.html.insert(0, head)
+        else:
+            soup.insert(0, head)
+        changed = True
+    else:
+        head = soup.head
+    all_meta = soup.find_all("meta")
+    if not all_meta:
+        return False
+    for m in all_meta:
+        m.extract()
+        changed = True
+    temp_soup = BeautifulSoup("", "html.parser")
+    for m in all_meta:
+        temp_soup.append(m)
+        temp_soup.append("\n")
+    title_tag = head.title
+    if title_tag:
+        title_tag.insert_after(temp_soup)
+    else:
+        head.insert(0, temp_soup)
+    if changed:
+        with open(file_path, "w", encoding="utf-8") as f:
+            f.write(str(soup))
+
+    return changed
+
+
+
+def consolidate_meta_in_dir(site_dir: str):
+    for root, dirs, files in os.walk(site_dir):
+        for file in files:
+            if not file.lower().endswith(HTML_EXTS):
+                continue
+            file_path = os.path.join(root, file)
+            if consolidate_meta(file_path):
+                print(f"Meta собраны в head: {file_path}")
+            else:
+                print(f"Изменений не было: {file_path}")
+
+
+consolidate_meta_in_dir(site_dir)
+
+
+
+# ========= переписываем пути CSS: url(...) и @import
+log_step("Переписываем пути в CSS (@import, url(...))")
+
+def css_rewrite_paths(css_abs: str):
+    with open(css_abs, "r", encoding="utf-8", errors="ignore") as f:
+        txt = f.read()
+    changed = False
+
+    def repl_import(m):
+        nonlocal changed
+        urlq = (m.group(1) or m.group(2)).strip().strip('"\'')
+        clean = strip_wayback(urlq)
+        key = url_basename(clean).lower()
+
+        if key in css_map:
+            target = css_map[key]
+        elif clean in css_map:
+            target = css_map[clean]
+        else:
+            return m.group(0)
+
+        new_rel = os.path.relpath(
+            os.path.join(site_abs, target),
+            start=os.path.dirname(css_abs)
+        )
+        changed = True
+        return f'@import "{norm_slashes(new_rel)}";'
+
+    txt2 = re.sub(
+        r'@import\s+(?:(?:url\(\s*[\'"]?(.*?)[\'"]?\s*\))|[\'"](.*?)[\'"])\s*;',
+        repl_import, txt, flags=re.I
+    )
+
+    def repl_url(m):
+        nonlocal changed
+        inside = m.group(1).strip().strip('"\'')
+        clean = strip_wayback(inside).split("#", 1)[0].split("?", 1)[0]
+        key = url_basename(clean).lower()
+
+        if key in img_map:
+            target = img_map[key]
+        elif clean in img_map:
+            target = img_map[clean]
+        elif key in font_map:
+            target = font_map[key]
+        elif clean in font_map:
+            target = font_map[clean]
+        else:
+            if clean != inside:
+                changed = True
+                return f'url({clean})'
+            return m.group(0)
+
+        new_rel = os.path.relpath(
+            os.path.join(site_abs, target),
+            start=os.path.dirname(css_abs)
+        )
+        changed = True
+        return f'url({norm_slashes(new_rel)})'
+
+    txt3 = re.sub(r'url\((.*?)\)', repl_url, txt2, flags=re.I)
+
+    if txt3 != txt:
+        changed = True
+        with open(css_abs, "w", encoding="utf-8") as f:
+            f.write(txt3)
+    return changed
+
+
+css_changed_count = 0
+for fname in os.listdir(assets_css):
+    if is_css(fname):
+        changed = css_rewrite_paths(os.path.join(assets_css, fname))
+        if changed:
+            css_changed_count += 1
+            log(f"CSS обновлён: {fname}")
+
+log(f"CSS файлов переписано: {css_changed_count}")
+
+
+
+
+
+# ======== удалим мусорные папки и файлы
+def prepare_site_structure(site_base: str = "site"):
+    site_abs = os.path.abspath(site_base)
+    domain_root = find_domain_root(site_abs)
+    if not domain_root:
+        raise RuntimeError("Не удалось найти корень сайта")
+
+    if os.path.abspath(domain_root) != site_abs:
+        merge_dir(domain_root, site_abs)
+        shutil.rmtree(domain_root, ignore_errors=True)
+
+    trash_dirs = {"analytics", "google-analytics", "tagmanager", "www.googletagmanager.com", "wp-json"}
+    trash_exts = {".asp", ".jsp"}
+
+    for root, dirs, files in os.walk(site_abs, topdown=True):
+        for d in dirs[:]:
+            if d.lower() in trash_dirs:
+                p = os.path.join(root, d)
+                shutil.rmtree(p, ignore_errors=True)
+                log(f"Удалена папка мусор: {p}")
+                dirs.remove(d)
+        for f in files:
+            if any(f.lower().endswith(ext) for ext in trash_exts):
+                p = os.path.join(root, f)
+                try:
+                    os.remove(p)
+                    log(f"Удалён файл мусор: {p}")
+                except Exception as e:
+                    log_warn(f"Не удалось удалить {p}: {e}")
+
+    log(f"Структура сайта подготовлена: {site_base}")
+
+prepare_site_structure("site")
+
+
+
+
+# ========= Удалим пустые папки
+log_step("Удаляем пустые папки")
+removed_dirs = 0
+for root, dirs, files in os.walk(site_abs, topdown=False):
+    for d in dirs:
+        p = os.path.join(root, d)
+        if os.path.abspath(p).startswith(os.path.abspath(assets_dir)):
+            continue
+        try:
+            if not os.listdir(p):
+                os.rmdir(p)
+                removed_dirs += 1
+                log(f"Папка удалена: {p}")
+        except OSError as e:
+            log_warn(f"Не удалось удалить '{p}': {e}")
+
+
+
+# ======= генерация sitemap и robots
+def generate_robots_and_sitemap(site_base: str = "site", domain: str = None):
+
+    site_abs = os.path.abspath(site_base)
+
+    # --- robots.txt ---
+    robots_path = os.path.join(site_abs, "robots.txt")
+    with open(robots_path, "w", encoding="utf-8") as f:
+        f.write(f"""User-agent: *
+Allow: /
+Sitemap: https://{domain}/sitemap.xml
+""")
+    log(f"robots.txt создан: {robots_path}")
+
+    # --- sitemap.xml ---
+    urls = []
+    today = datetime.today().strftime("%Y-%m-%d")
+
+    for root, dirs, files in os.walk(site_abs):
+        for fname in files:
+            if fname.lower().endswith((".html", ".htm")):
+                abs_path = os.path.join(root, fname)
+                rel_path = os.path.relpath(abs_path, site_abs)
+                rel_url = rel_path.replace(os.sep, "/")
+                if fname.lower() in ("index.html", "index.htm"):
+                    if os.path.dirname(rel_url) == "":
+                        loc = f"https://{domain}/"
+                    else:
+                        folder = os.path.dirname(rel_url)
+                        loc = f"https://{domain}/{folder}/"
+                else:
+                    loc = f"https://{domain}/{rel_url}"
+
+                urls.append((loc, today))
+
+    sitemap_path = os.path.join(site_abs, "sitemap.xml")
+    with open(sitemap_path, "w", encoding="utf-8") as f:
+        f.write('<?xml version="1.0" encoding="UTF-8"?>\n')
+        f.write('<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n')
+        for loc, lastmod in urls:
+            f.write("    <url>\n")
+            f.write(f"        <loc>{loc}</loc>\n")
+            f.write(f"        <lastmod>{lastmod}</lastmod>\n")
+            f.write("        <changefreq>weekly</changefreq>\n")
+            f.write("        <priority>0.8</priority>\n")
+            f.write("    </url>\n")
+        f.write("</urlset>\n")
+
+    log(f"sitemap.xml создан: {sitemap_path} (всего {len(urls)} страниц)")
+
+generate_robots_and_sitemap("site", domain)
+
+
+
+# ============= Очистка кода
+def clean_code(soup: BeautifulSoup) -> BeautifulSoup:
+    for tag_id in ["wm-ipp-base", "wm-capinfo", "wm-logo", "wm-ipp-print", "www.googletagmanager.com"]:
+        t = soup.find(id=tag_id)
+        if t:
+            t.decompose()
+
+    for s in soup.find_all("script", src=True):
+        if "web.archive.org" in s["src"] or "/_static/" in s["src"]:
+            s.decompose()
+    for s in soup.find_all("script"):
+        if "WaybackMachine" in str(s) or "archive.org" in str(s):
+            s.decompose()
+
+    for link in soup.find_all("link", href=True):
+        href = link["href"]
+        rel = link.get("rel", [])
+        type_attr = link.get("type", "")
+
+        if (
+            "/_static/" in href
+            or "web.archive.org" in href
+            or ("profile" in [r.lower() for r in rel])
+            or (
+                rel 
+                and "alternate" in [r.lower() for r in rel] 
+                and type_attr in ["application/json+oembed", "text/xml+oembed"]
+            )
+        ):
+            link.decompose()
+
+    for link in soup.find_all("link", rel=True):
+        rels = [r.lower() for r in link.get("rel", [])]
+        if any(r in ["dns-prefetch", "preconnect", "preload"] for r in rels):
+            link.decompose()
+
+
+    for style in soup.find_all("style", id=True):
+        if "wm" in style["id"].lower():
+            style.decompose()
+
+
+    for comment in soup.find_all(string=lambda text: isinstance(text, Comment)):
+        if "WAYBACK" in comment or "web.archive" in comment.lower():
+            comment.extract()
+
+    for tag in soup.find_all(True):
+        attrs_to_remove = [a for a in tag.attrs if a.startswith("data-wm") or a.startswith("wm-")]
+        for attr in attrs_to_remove:
+            del tag[attr]
+
+    for link in soup.find_all("link", rel=True):
+        if "profile" in [r.lower() for r in link.get("rel", [])]:
+            link.decompose()
+
+
+    for s in soup.find_all("script"):
+        s_text = str(s)
+        if "RufflePlayer" in s_text:
+            s.decompose()
+            continue
+
+        if "dataLayer" in s_text or "gtm4wp_datalayer_name" in s_text:
+            s.decompose()
+            continue
+
+        if s.has_attr("data-cfasync") or s.has_attr("data-pagespeed-no-defer"):
+            s.decompose()
+            continue
+
+    return soup
+
+
+def clean_all_html_in_site():
+    root_dir = os.path.join(os.getcwd(), "site")
+
+    if not os.path.exists(root_dir):
+        print(f"Папка '{root_dir}' не найдена!")
+        return
+
+    total_files = 0
+
+    for subdir, _, files in os.walk(root_dir):
+        for file in files:
+            if file.lower().endswith(".html"):
+                file_path = os.path.join(subdir, file)
+
+                try:
+                    with open(file_path, "r", encoding="utf-8") as f:
+                        html = f.read()
+
+                    soup = BeautifulSoup(html, "lxml")
+                    soup = clean_code(soup)
+
+                    with open(file_path, "w", encoding="utf-8") as f:
+                        f.write(str(soup))
+
+                    total_files += 1
+                    print(f"Очищен файл: {file_path}")
+
+                except Exception as e:
+                    print(f"Ошибка при обработке {file_path}: {e}")
+
+    print(f"\nГотово! Очищено файлов: {total_files}")
+
+clean_all_html_in_site()
+
+
 
 
 
@@ -1236,13 +1411,9 @@ def _strip_js_comments_preserve_strings(js: str) -> str:
             continue
 
         elif state == BLOCK_COMMENT:
-            # сохраняем лицензионные /*! ... */ комментарии
             if js[i-2:i] == '/*' and i-2 >= 0 and js[i-2:i] == '/*' and (i-2 == 0 or js[i-3] != '!'):
                 pass
             if ch == '*' and nxt == '/':
-                # если это /*! ... */, вернём его
-                start = i
-                # найдём начало комментария назад
                 j = i - 1
                 is_license = False
                 while j >= 1:
@@ -1251,7 +1422,6 @@ def _strip_js_comments_preserve_strings(js: str) -> str:
                         break
                     j -= 1
                 if is_license:
-                    # вставляем исходный комментарий назад
                     out.append('/*' + js[j+1:i] + '*/')
                 i += 2
                 state = OUT
@@ -1300,7 +1470,6 @@ def run_minification(site_abs: str):
             ext = os.path.splitext(fname)[1].lower()
             if ext not in (".html", ".htm", ".css", ".js"):
                 continue
-            # пропускаем уже минифицированные
             low = fname.lower()
             if low.endswith(".min.css") or low.endswith(".min.js"):
                 continue
@@ -1315,15 +1484,12 @@ def run_minification(site_abs: str):
                     with open(fpath, "w", encoding="utf-8") as f:
                         f.write(minimized)
                     changed_files += 1
-                    log(f"Minified: {os.path.relpath(fpath)}")
+                    log(f"Минифицирован: {os.path.relpath(fpath)}")
             except Exception as e:
                 log_warn(f"Минификация провалена для {fpath}: {e}")
 
     log(f"Итого минифицировано файлов: {changed_files}")
 
 run_minification(site_abs)
-
-
-
 
 log_step("ГОТОВО")
